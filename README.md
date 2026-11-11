@@ -44,7 +44,8 @@ These overlap with this mod. Running them together in the same app has not been 
 
 - **[Photoshop Dark Menus](https://windhawk.net/mods/photoshop-dark-menus)** covers Photoshop only. This mod does everything it did and reaches the other Adobe apps, so disable it if you use this one.
 - **[Dark mode context menus](https://windhawk.net/mods/dark-menus)** darkens the menus Windows draws, in every app and in fixed colors. It does not reach menus an app draws itself, which is why Photoshop stays light with it, or dropdown lists. This mod uses the same technique for the menus Windows draws, so exclude the Adobe apps from it in its Advanced tab.
-- **[Windows 11 Custom Title Bar Colours](https://windhawk.net/mods/win11-custom-title-bar-colours)** colors title bars in every app. If you prefer it, turn off **Dark Title Bars** here.
+- **[After Effects Theme](https://windhawk.net/mods/after-effects-theme)** and **[Premiere Pro Theme](https://windhawk.net/mods/premiere-pro-theme)** recolor the whole interface of those two apps in palettes of their own, title bar, menu bar and menus included. They answer the same menu bar messages as this mod, so if you use one of them, exclude that app from this mod in its Advanced tab.
+- **[Windows 11 Custom Title Bar Colours](https://windhawk.net/mods/win11-custom-title-bar-colours)** and **[Auto Custom Titlebar Colors](https://windhawk.net/mods/auto-custom-titlebar-colors)** color title bars in every app. If you prefer one of them, turn off **Dark Title Bars** here.
 
 ## Requirements
 
