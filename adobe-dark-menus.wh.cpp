@@ -10,15 +10,20 @@
 // @include       Photoshop.exe
 // @include       Illustrator.exe
 // @include       InDesign.exe
+// @include       InDesign (Beta).exe
+// @include       InCopy.exe
+// @include       InCopy (Beta).exe
 // @include       Dreamweaver.exe
 // @include       AfterFX.exe
 // @include       AfterFX (Beta).exe
 // @include       Adobe Premiere Pro.exe
 // @include       Adobe Premiere Pro (Beta).exe
 // @include       Adobe Audition.exe
+// @include       Adobe Audition (Beta).exe
 // @include       Adobe Media Encoder.exe
 // @include       Adobe Media Encoder (Beta).exe
 // @include       Adobe Bridge.exe
+// @include       Lightroom.exe
 // @include       Acrobat.exe
 // @compilerOptions -lgdi32 -lcomctl32 -ldwmapi
 // ==/WindhawkMod==
@@ -36,8 +41,11 @@ and no other application is affected.
 
 ## Supported apps
 
-Photoshop, Illustrator, InDesign, Dreamweaver, After Effects, Premiere Pro,
-Audition, Media Encoder, Bridge and Acrobat.
+Photoshop, Illustrator, InDesign, InCopy, Dreamweaver, After Effects, Premiere
+Pro, Audition, Media Encoder, Bridge, Lightroom, Lightroom Classic and Acrobat.
+
+The Beta versions of Photoshop, Illustrator, InDesign, InCopy, After Effects,
+Premiere Pro, Audition and Media Encoder are covered as well.
 
 ## Screenshots
 
@@ -102,6 +110,7 @@ tested, so use one or the other for the apps above.
 - **Border Color**: Color of the frame around menus an app draws itself and around dropdown lists. Leave empty to keep the system frame on those menus and to use the background color on lists (Default: `#2D2D2D`).
 - **Theme Dropdown Lists**: Darken the dropdown lists an app draws itself, using the colors above (Default: on).
 - **Darken Menus Windows Draws**: Use Windows' dark menu theme, and paint real menu bars dark (Default: on).
+- **Scroll Long Menus Instead of Columns**: Open a menu that an app splits into columns as one dark column that scrolls, since Windows cannot darken a menu with columns. After Effects splits its Effect menu this way once it holds more than the screen fits. Turn it off to keep the columns, which stay light (Default: on).
 - **Dark Title Bars**: Color standard title bars to match the menus (Default: on).
 - **Title Bar Color**: Leave empty to match Menu Background Color (Default: empty).
 - **Title Bar Text Color**: Leave empty to let Windows choose, which dims the text on a window that is not active (Default: empty).
@@ -196,6 +205,19 @@ rather than drawing a new one. On a menu an app draws itself, Windows draws a ba
 triangle instead of the square, and the mod recolors it to Menu Text Color or
 Disabled Text Color.
 
+### Menus split into columns
+
+An app can split a long menu into columns. After Effects does it to a menu taller
+than the screen, which is what its Effect menu becomes with enough plugins
+installed. Windows turns its theme off for any menu that has a column break and
+draws it the old way, in light colors. So while such a menu is open, the mod takes
+its column breaks off, and Windows lays it out as one dark column that scrolls. The
+breaks go back on when the menu closes, so the app finds its menu as it left it.
+
+If the app writes a break back while the menu is open, the mod holds that write
+until the menu closes. Windows would otherwise lay the open menu out in columns
+again, light and scrolled back to the top.
+
 ### Title bars
 
 Windows 11 lets a process color a standard title bar through
@@ -218,8 +240,9 @@ intercepting a system one, in windows where a light fill can be the content.
 
 A dropdown list Windows draws itself keeps its normal colors, as described above.
 
-Long menus scroll rather than splitting into columns, because Windows turns its
-theme off for any menu that has columns, which leaves them light.
+With **Scroll Long Menus Instead of Columns** turned off, a menu that an app
+splits into columns stays light, because Windows turns its theme off for any menu
+that has columns.
 
 ## Source and bug reports
 
@@ -266,6 +289,13 @@ a description does.
   $description: >-
     Use Windows' dark menu theme for the menus Windows draws itself, which is
     most menus in most Adobe apps, and paint real menu bars dark.
+- ScrollColumnMenus: true
+  $name: "Scroll Long Menus Instead of Columns"
+  $description: >-
+    Windows cannot darken a menu that an app splits into columns, as After
+    Effects does with its Effect menu once it holds more than the screen fits.
+    With this on, such a menu opens as one dark column that scrolls. Turn it off
+    to keep the columns, which stay light.
 - ThemeTitleBars: true
   $name: "Dark Title Bars"
   $description: >-
@@ -287,10 +317,13 @@ a description does.
 #include <dwmapi.h>
 #include <windhawk_api.h>
 #include <windhawk_utils.h>
+#include <stddef.h>
+#include <string.h>
 #include <wchar.h>
 #include <wctype.h>
 #include <atomic>
 #include <mutex>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -316,6 +349,7 @@ std::atomic<COLORREF> g_colTitleBarText{kDwmColorDefault};
 
 std::atomic<bool> g_themeDropdowns{true};
 std::atomic<bool> g_themeWindowsMenus{true};
+std::atomic<bool> g_scrollColumnMenus{true};
 std::atomic<bool> g_themeTitleBars{true};
 
 // Whether the process is actually in dark menu mode. Stays false with the setting
@@ -441,6 +475,7 @@ void PublishColor(std::atomic<COLORREF>* pColor, std::atomic<HBRUSH>* pSlot, COL
 void LoadSettings() {
     g_themeDropdowns.store(Wh_GetIntSetting(L"ThemeDropdowns") != 0, std::memory_order_relaxed);
     g_themeWindowsMenus.store(Wh_GetIntSetting(L"ThemeWindowsMenus") != 0, std::memory_order_relaxed);
+    g_scrollColumnMenus.store(Wh_GetIntSetting(L"ScrollColumnMenus") != 0, std::memory_order_relaxed);
     g_themeTitleBars.store(Wh_GetIntSetting(L"ThemeTitleBars") != 0, std::memory_order_relaxed);
 
     PublishColor(&g_colMenu, &g_hMenuBrush,
@@ -1313,6 +1348,347 @@ LRESULT CALLBACK CbtProcHook(int code, WPARAM wParam, LPARAM lParam) {
     return CallNextHookEx(nullptr, code, wParam, lParam);
 }
 
+// ---------------------------------------------------------------------------
+// Menus an app splits into columns
+// ---------------------------------------------------------------------------
+
+// An app can break a long menu into columns. After Effects does it to a menu taller than
+// the screen, which is what its Effect menu becomes with enough plugins installed: its
+// menu update puts MFT_MENUBARBREAK on every item whose position is a multiple of the
+// rows that fit. Windows draws a menu that has a break the old way, without the theme,
+// so the dark theme never reaches it. Without the breaks the same menu is one themed
+// column that scrolls.
+//
+// So the breaks come off while such a menu is open and go back on when it closes, which
+// leaves the menu as the app built it whenever it is not on screen.
+constexpr UINT kColumnBreaks = MFT_MENUBREAK | MFT_MENUBARBREAK;
+
+// How many such menus can be open at once, submenus included, and how many columns one
+// can have. Past either, a menu is left as the app made it.
+constexpr int kMaxHeldMenus = 8;
+constexpr int kMaxHeldBreaks = 32;
+
+// A menu whose breaks the mod is holding, and where they go back.
+struct HeldMenu {
+    HMENU hMenu;
+    DWORD threadId;
+    int itemCount;
+    int breakCount;
+    UINT positions[kMaxHeldBreaks];
+    UINT breaks[kMaxHeldBreaks];
+};
+
+// A plain array rather than a container, so there is nothing here for the loader to
+// destroy at process exit. See ProcessIsExiting.
+HeldMenu g_heldMenus[kMaxHeldMenus];
+std::mutex g_heldMenusMutex;
+
+// Read on every SetMenuItemInfo call in the process, so that the hook costs one load
+// while no such menu is open.
+std::atomic<int> g_heldMenuCount{0};
+
+decltype(&SetMenuItemInfoW) SetMenuItemInfoW_Original;
+decltype(&SetMenuItemInfoA) SetMenuItemInfoA_Original;
+
+// Called with g_heldMenusMutex held. A null handle finds a free entry.
+HeldMenu* FindHeldMenu(HMENU hMenu) {
+    for (HeldMenu& held : g_heldMenus) {
+        if (held.hMenu == hMenu) return &held;
+    }
+    return nullptr;
+}
+
+// Called with g_heldMenusMutex held. Returns false when the menu has more columns than
+// an entry can record.
+bool AddHeldBreak(HeldMenu* held, UINT pos, UINT breaks) {
+    for (int i = 0; i < held->breakCount; i++) {
+        if (held->positions[i] == pos) {
+            held->breaks[i] = breaks;
+            return true;
+        }
+    }
+    if (held->breakCount == kMaxHeldBreaks) return false;
+
+    held->positions[held->breakCount] = pos;
+    held->breaks[held->breakCount] = breaks;
+    held->breakCount++;
+    return true;
+}
+
+bool GetItemType(HMENU hMenu, UINT pos, UINT* pType) {
+    MENUITEMINFOW mii = {};
+    mii.cbSize = sizeof(mii);
+    mii.fMask = MIIM_FTYPE;
+    if (!GetMenuItemInfoW(hMenu, pos, TRUE, &mii)) return false;
+
+    *pType = mii.fType;
+    return true;
+}
+
+// Past the hook, which would hold back the mod's own writes as well.
+bool SetItemType(HMENU hMenu, UINT pos, UINT type) {
+    MENUITEMINFOW mii = {};
+    mii.cbSize = sizeof(mii);
+    mii.fMask = MIIM_FTYPE;
+    mii.fType = type;
+
+    auto setItemInfo = SetMenuItemInfoW_Original ? SetMenuItemInfoW_Original : SetMenuItemInfoW;
+    return setItemInfo(hMenu, pos, TRUE, &mii) != FALSE;
+}
+
+// Takes the breaks off a menu that is about to be shown. Called again for a menu that is
+// already held, it picks up the breaks that have appeared since.
+void HoldColumnMenu(HMENU hMenu) {
+    if (!hMenu || !g_scrollColumnMenus.load(std::memory_order_relaxed) ||
+        !g_darkMenusActive.load(std::memory_order_relaxed) || ProcessIsExiting() ||
+        g_unloading.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    int itemCount = GetMenuItemCount(hMenu);
+    int found = 0;
+    UINT positions[kMaxHeldBreaks], types[kMaxHeldBreaks];
+    for (int i = 0; i < itemCount; i++) {
+        UINT type;
+        if (!GetItemType(hMenu, (UINT)i, &type)) continue;
+
+        // A menu the app paints is dark through the app's own drawing, columns and all.
+        if (type & MFT_OWNERDRAW) return;
+
+        if (type & kColumnBreaks) {
+            // Windows reports the type of an old-style bitmap item with MFT_BITMAP in it
+            // and then refuses that type when it is written back. Taking some of a
+            // menu's breaks off and not others would only move its columns.
+            if ((type & MFT_BITMAP) || found == kMaxHeldBreaks) return;
+            positions[found] = (UINT)i;
+            types[found] = type;
+            found++;
+        }
+    }
+    if (found == 0) return;
+
+    bool recorded[kMaxHeldBreaks] = {};
+    {
+        std::lock_guard<std::mutex> lock(g_heldMenusMutex);
+
+        // Wh_ModUninit may already have been through the table.
+        if (g_unloading.load(std::memory_order_relaxed)) return;
+
+        HeldMenu* held = FindHeldMenu(hMenu);
+        if (!held) {
+            held = FindHeldMenu(nullptr);
+            if (!held) {
+                // Nothing reports a menu the app destroyed while it was held.
+                for (HeldMenu& old : g_heldMenus) {
+                    if (old.hMenu && !IsMenu(old.hMenu)) {
+                        old = {};
+                        g_heldMenuCount.fetch_sub(1, std::memory_order_relaxed);
+                    }
+                }
+                held = FindHeldMenu(nullptr);
+            }
+            if (!held) return;
+
+            *held = {};
+            held->hMenu = hMenu;
+            g_heldMenuCount.fetch_add(1, std::memory_order_relaxed);
+        } else if (held->itemCount != itemCount) {
+            // The app has rebuilt the menu since, so the positions on record are no use.
+            held->breakCount = 0;
+        }
+
+        held->threadId = GetCurrentThreadId();
+        held->itemCount = itemCount;
+        for (int i = 0; i < found; i++) {
+            recorded[i] = AddHeldBreak(held, positions[i], types[i] & kColumnBreaks);
+        }
+    }
+
+    // A break that could not be recorded stays on, since nothing would put it back.
+    for (int i = 0; i < found; i++) {
+        if (recorded[i]) SetItemType(hMenu, positions[i], types[i] & ~kColumnBreaks);
+    }
+}
+
+// Positions say nothing once the app has added or removed items. Its own next update
+// decides where the breaks go then.
+void RestoreColumnBreaks(const HeldMenu& held) {
+    if (!IsMenu(held.hMenu) || GetMenuItemCount(held.hMenu) != held.itemCount) return;
+
+    for (int i = 0; i < held.breakCount; i++) {
+        UINT type;
+        if (GetItemType(held.hMenu, held.positions[i], &type)) {
+            SetItemType(held.hMenu, held.positions[i], type | held.breaks[i]);
+        }
+    }
+}
+
+// Whether a popup of this thread is showing the menu.
+bool MenuIsOnScreen(HMENU hMenu) {
+    struct Search {
+        HMENU hMenu;
+        bool found;
+    } search = { hMenu, false };
+
+    EnumThreadWindows(GetCurrentThreadId(), [](HWND hWnd, LPARAM lParam) WINAPI -> BOOL {
+        auto* pSearch = (Search*)lParam;
+        if (IsWindowVisible(hWnd) && ClassifyWindow(hWnd) == WindowKind::MenuPopup &&
+            (HMENU)SendMessageW(hWnd, MN_GETHMENU, 0, 0) == pSearch->hMenu) {
+            pSearch->found = true;
+            return FALSE;
+        }
+        return TRUE;
+    }, (LPARAM)&search);
+
+    return search.found;
+}
+
+// Puts the breaks back on every menu this thread no longer shows. It asks what is on
+// screen rather than trusting the message that reports one menu closed, which also covers
+// a popup that closes without that message. A menu that is still open is left held:
+// changing an item's type on an open menu leaves Windows hit-testing a layout it has not
+// made yet, and the pointer stops finding the items.
+void ReleaseClosedColumnMenus() {
+    if (g_heldMenuCount.load(std::memory_order_relaxed) == 0 || ProcessIsExiting()) return;
+
+    DWORD tid = GetCurrentThreadId();
+    HMENU mine[kMaxHeldMenus];
+    int count = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_heldMenusMutex);
+        for (const HeldMenu& held : g_heldMenus) {
+            if (held.hMenu && held.threadId == tid) mine[count++] = held.hMenu;
+        }
+    }
+
+    // Asked outside the lock: MN_GETHMENU is a message to the popup.
+    for (int i = 0; i < count; i++) {
+        if (MenuIsOnScreen(mine[i])) continue;
+
+        HeldMenu released;
+        {
+            std::lock_guard<std::mutex> lock(g_heldMenusMutex);
+            HeldMenu* held = FindHeldMenu(mine[i]);
+            if (!held) continue;
+
+            released = *held;
+            *held = {};
+            g_heldMenuCount.fetch_sub(1, std::memory_order_relaxed);
+        }
+        RestoreColumnBreaks(released);
+    }
+}
+
+// For Wh_ModUninit and for the setting going off, which run on another thread and cannot
+// ask what is on screen. No menu is normally open then, since the app is not in front
+// while its mod is switched off or its settings are changed.
+void ReleaseAllColumnMenus() {
+    HeldMenu released[kMaxHeldMenus];
+    {
+        std::lock_guard<std::mutex> lock(g_heldMenusMutex);
+        for (int i = 0; i < kMaxHeldMenus; i++) {
+            released[i] = g_heldMenus[i];
+            g_heldMenus[i] = {};
+        }
+        g_heldMenuCount.store(0, std::memory_order_relaxed);
+    }
+
+    for (const HeldMenu& held : released) {
+        if (held.hMenu) RestoreColumnBreaks(held);
+    }
+}
+
+// The longest item text a write is compared against. A longer one is passed on unread.
+constexpr int kMaxComparedText = 512;
+
+// Whether writing these fields would leave the item exactly as it is.
+template <typename Info, typename GetInfo>
+bool ItemAlreadyMatches(HMENU hMenu, UINT pos, const Info& wanted, GetInfo getInfo) {
+    constexpr UINT kCompared = MIIM_STATE | MIIM_ID | MIIM_SUBMENU | MIIM_CHECKMARKS | MIIM_TYPE |
+                               MIIM_DATA | MIIM_STRING | MIIM_BITMAP | MIIM_FTYPE;
+    UINT mask = wanted.fMask;
+    if (mask & ~kCompared) return false;
+
+    // With MIIM_TYPE, dwTypeData is a bitmap or a value of the app's on these.
+    if ((mask & MIIM_TYPE) && (wanted.fType & (MFT_BITMAP | MFT_OWNERDRAW))) return false;
+
+    using Char = std::remove_pointer_t<decltype(wanted.dwTypeData)>;
+    Char text[kMaxComparedText];
+    text[0] = 0;
+
+    Info current = {};
+    current.cbSize = sizeof(current);
+    current.fMask = mask;
+    current.dwTypeData = text;
+    current.cch = kMaxComparedText;
+    if (!getInfo(hMenu, pos, TRUE, &current)) return false;
+
+    if ((mask & (MIIM_FTYPE | MIIM_TYPE)) && current.fType != wanted.fType) return false;
+    if ((mask & MIIM_STATE) && current.fState != wanted.fState) return false;
+    if ((mask & MIIM_ID) && current.wID != wanted.wID) return false;
+    if ((mask & MIIM_SUBMENU) && current.hSubMenu != wanted.hSubMenu) return false;
+    if ((mask & MIIM_CHECKMARKS) && (current.hbmpChecked != wanted.hbmpChecked ||
+                                     current.hbmpUnchecked != wanted.hbmpUnchecked)) {
+        return false;
+    }
+    if ((mask & MIIM_DATA) && current.dwItemData != wanted.dwItemData) return false;
+    if ((mask & MIIM_BITMAP) && current.hbmpItem != wanted.hbmpItem) return false;
+
+    bool hasText = (mask & MIIM_STRING) || ((mask & MIIM_TYPE) && !(wanted.fType & MFT_SEPARATOR));
+    if (hasText) {
+        // A text the buffer cut short cannot be compared.
+        if (!wanted.dwTypeData || current.cch >= (UINT)kMaxComparedText - 1) return false;
+
+        for (int i = 0;; i++) {
+            if (text[i] != wanted.dwTypeData[i]) return false;
+            if (!text[i]) break;
+        }
+    }
+    return true;
+}
+
+// A break written to a menu that is open without its breaks would undo that on the spot:
+// Windows lays the open popup out again in columns, light, and scrolled back to the top.
+// After Effects' menu update writes one wherever it finds a break missing, so it would do
+// this if it ran while the menu is open. So on a held menu the break is noted, to go on
+// when the menu closes, and the rest of the write is passed on without it.
+//
+// Usually there is no rest: the app is writing back what it read, plus the break. Windows
+// would still repaint the whole popup for that, so a write that changes nothing is dropped.
+//
+// Returns false for a menu that is not held, which the caller passes on as it came. Only
+// a write by position is looked at. A break belongs to a position, and a command id can
+// just as well name an item inside a submenu.
+template <typename Info, typename SetInfo, typename GetInfo>
+bool SetHeldItemInfo(HMENU hMenu, UINT pos, BOOL byPosition, const Info* pInfo, SetInfo setInfo,
+                     GetInfo getInfo, BOOL* pResult) {
+    // Windows accepts the structure with or without its last member.
+    if (!byPosition || !hMenu || ProcessIsExiting() || pInfo->cbSize > sizeof(Info) ||
+        pInfo->cbSize < offsetof(Info, hbmpItem)) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_heldMenusMutex);
+        HeldMenu* held = FindHeldMenu(hMenu);
+        if (!held) return false;
+
+        AddHeldBreak(held, pos, pInfo->fType & kColumnBreaks);
+    }
+
+    Info stripped = {};
+    memcpy(&stripped, pInfo, pInfo->cbSize);
+    stripped.fType &= ~kColumnBreaks;
+
+    *pResult = ItemAlreadyMatches(hMenu, pos, stripped, getInfo) ? TRUE
+                                                                 : setInfo(hMenu, pos, TRUE, &stripped);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Thread hooks
+// ---------------------------------------------------------------------------
+
 // A thread whose hooks are up. The engine does not remove SetWindowsHookEx hooks, and
 // their procedures live in the mod image, so each one is kept to be released at uninit.
 // The handle holds the thread open, because Windows does not reuse a thread's id while a
@@ -1538,12 +1914,15 @@ LRESULT CALLBACK CallWndProcHook(int code, WPARAM wParam, LPARAM lParam) {
                g_themeDropdowns.load(std::memory_order_relaxed)) {
         // Also names the list, earlier in the paint than the first row.
         if (IsComboListWindow((HWND)cwp->lParam)) SubclassComboList((HWND)cwp->lParam);
+    } else if (cwp->message == WM_UNINITMENUPOPUP || cwp->message == WM_EXITMENULOOP) {
+        // Ahead of the app's own handler, which then finds its menu as it left it.
+        ReleaseClosedColumnMenus();
     }
 
     return CallNextHookEx(nullptr, code, wParam, lParam);
 }
 
-// Closes the counters, and stamps a popup that has just been initialized.
+// Closes the counters, and sees to a popup that has just been initialized.
 LRESULT CALLBACK CallWndRetProcHook(int code, WPARAM wParam, LPARAM lParam) {
     if (code != HC_ACTION || !lParam) {
         return CallNextHookEx(nullptr, code, wParam, lParam);
@@ -1563,7 +1942,9 @@ LRESULT CALLBACK CallWndRetProcHook(int code, WPARAM wParam, LPARAM lParam) {
     }
 
     if (ret->message == WM_INITMENUPOPUP) {
-        // In the return hook, so that items the app adds in its own handler are seen.
+        // In the return hook, so that what the app does to the menu in its own handler is
+        // seen: the items it adds, and the column breaks it sets.
+        HoldColumnMenu((HMENU)ret->wParam);
         if (MenuIsOpen()) ApplyMenuBackground((HMENU)ret->wParam);
     } else if (ret->message == WM_DRAWITEM && ret->lParam) {
         // Nothing is recorded for a draw that began before the opening hook was up.
@@ -1593,10 +1974,17 @@ LRESULT CALLBACK CallWndRetProcHook(int code, WPARAM wParam, LPARAM lParam) {
 void EnterMenu(HMENU hMenu) {
     tl_menuDepth++;
     EnsureThreadHooks();
+
+    // From here as well, for a popup tracked with TPM_NONOTIFY, whose owner is sent no
+    // WM_INITMENUPOPUP.
+    HoldColumnMenu(hMenu);
     ApplyMenuBackground(hMenu);
 }
 
 void LeaveMenu() {
+    // And no WM_UNINITMENUPOPUP either.
+    ReleaseClosedColumnMenus();
+
     if (--tl_menuDepth > 0) return;
 
     // A menu dismissed mid-draw would otherwise leave the overrides stuck on.
@@ -1975,6 +2363,31 @@ BOOL WINAPI SetMenuInfo_Hook(HMENU hMenu, LPCMENUINFO pInfo) {
     return SetMenuInfo_Original(hMenu, pInfo);
 }
 
+// Every SetMenuItemInfo call in the process comes through these two. One that carries no
+// column break, or that comes while no menu is held, goes straight on.
+template <typename Info>
+inline bool CarriesColumnBreak(const Info* pInfo) {
+    return pInfo && (pInfo->fMask & (MIIM_FTYPE | MIIM_TYPE)) && (pInfo->fType & kColumnBreaks);
+}
+
+BOOL WINAPI SetMenuItemInfoW_Hook(HMENU hMenu, UINT item, BOOL byPosition, LPCMENUITEMINFOW pInfo) {
+    BOOL result;
+    if (g_heldMenuCount.load(std::memory_order_relaxed) > 0 && CarriesColumnBreak(pInfo) &&
+        SetHeldItemInfo(hMenu, item, byPosition, pInfo, SetMenuItemInfoW_Original, GetMenuItemInfoW, &result)) {
+        return result;
+    }
+    return SetMenuItemInfoW_Original(hMenu, item, byPosition, pInfo);
+}
+
+BOOL WINAPI SetMenuItemInfoA_Hook(HMENU hMenu, UINT item, BOOL byPosition, LPCMENUITEMINFOA pInfo) {
+    BOOL result;
+    if (g_heldMenuCount.load(std::memory_order_relaxed) > 0 && CarriesColumnBreak(pInfo) &&
+        SetHeldItemInfo(hMenu, item, byPosition, pInfo, SetMenuItemInfoA_Original, GetMenuItemInfoA, &result)) {
+        return result;
+    }
+    return SetMenuItemInfoA_Original(hMenu, item, byPosition, pInfo);
+}
+
 // ---------------------------------------------------------------------------
 // Windhawk events
 // ---------------------------------------------------------------------------
@@ -1982,6 +2395,14 @@ BOOL WINAPI SetMenuInfo_Hook(HMENU hMenu, LPCMENUINFO pInfo) {
 void Wh_ModSettingsChanged() {
     LoadSettings();
     ApplyDarkMenus();
+
+    // A menu still held would otherwise stay one column until it next closes, so the
+    // switch would take a second open to show.
+    if (!g_scrollColumnMenus.load(std::memory_order_relaxed) ||
+        !g_darkMenusActive.load(std::memory_order_relaxed)) {
+        ReleaseAllColumnMenus();
+    }
+
     RedrawMenuBars();
     SyncTitleBars();
 }
@@ -2007,6 +2428,8 @@ BOOL Wh_ModInit() {
     if (!WindhawkUtils::SetFunctionHook(DefFrameProcW, DefFrameProcW_Hook, &DefFrameProcW_Original)) Wh_Log(L"Failed to hook DefFrameProcW");
     if (!WindhawkUtils::SetFunctionHook(DefFrameProcA, DefFrameProcA_Hook, &DefFrameProcA_Original)) Wh_Log(L"Failed to hook DefFrameProcA");
     if (!WindhawkUtils::SetFunctionHook(SetMenuInfo, SetMenuInfo_Hook, &SetMenuInfo_Original)) Wh_Log(L"Failed to hook SetMenuInfo");
+    if (!WindhawkUtils::SetFunctionHook(SetMenuItemInfoW, SetMenuItemInfoW_Hook, &SetMenuItemInfoW_Original)) Wh_Log(L"Failed to hook SetMenuItemInfoW");
+    if (!WindhawkUtils::SetFunctionHook(SetMenuItemInfoA, SetMenuItemInfoA_Hook, &SetMenuItemInfoA_Original)) Wh_Log(L"Failed to hook SetMenuItemInfoA");
 
     ResolveDarkMenuApis();
     ApplyDarkMenus();
@@ -2084,8 +2507,10 @@ void Wh_ModUninit() {
         }
     }
 
-    // Undo the background brush stamped on the app's menus.
+    // Undo the background brush stamped on the app's menus, and hand back any column
+    // breaks still held.
     RestoreStampedMenus();
+    ReleaseAllColumnMenus();
 
     // The brushes are deliberately not deleted. Two paths hand them to the app and neither
     // can be reclaimed: MENUINFO::hbrBack on menus that outlive the mod, and GetSysColorBrush

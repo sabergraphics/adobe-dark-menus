@@ -6,7 +6,9 @@ Everything happens inside each app's own process. No system colors are changed a
 
 ## Supported apps
 
-Photoshop, Illustrator, InDesign, Dreamweaver, After Effects, Premiere Pro, Audition, Media Encoder, Bridge and Acrobat.
+Photoshop, Illustrator, InDesign, InCopy, Dreamweaver, After Effects, Premiere Pro, Audition, Media Encoder, Bridge, Lightroom, Lightroom Classic and Acrobat.
+
+The Beta versions of Photoshop, Illustrator, InDesign, InCopy, After Effects, Premiere Pro, Audition and Media Encoder are covered as well.
 
 ## Screenshots
 
@@ -78,6 +80,7 @@ The following settings can be customized in the Windhawk mod panel:
 - **Border Color**: Color of the frame around menus an app draws itself and around dropdown lists. Leave empty to keep the system frame on those menus and to use the background color on lists (Default: `#2D2D2D`).
 - **Theme Dropdown Lists**: Darken the dropdown lists an app draws itself, using the colors above (Default: on).
 - **Darken Menus Windows Draws**: Use Windows' dark menu theme, and paint real menu bars dark (Default: on).
+- **Scroll Long Menus Instead of Columns**: Open a menu that an app splits into columns as one dark column that scrolls, since Windows cannot darken a menu with columns. After Effects splits its Effect menu this way once it holds more than the screen fits. Turn it off to keep the columns, which stay light (Default: on).
 - **Dark Title Bars**: Color standard title bars to match the menus (Default: on).
 - **Title Bar Color**: Leave empty to match Menu Background Color (Default: empty).
 - **Title Bar Text Color**: Leave empty to let Windows choose, which dims the text on a window that is not active (Default: empty).
@@ -95,6 +98,7 @@ Adobe's apps do not all draw their menus the same way, and sharing a library doe
 | Dropdowns and context menus in most apps | Windows, through its theme engine | `SetPreferredAppMode(ForceDark)` and `FlushMenuThemes` |
 | Real menu bars, such as After Effects' | Windows, offered to the window first | `WM_UAHDRAWMENU` and `WM_UAHDRAWMENUITEM`, handled in a `DefWindowProc` hook |
 | Scroll arrows on long menus | The Windows kernel, directly in light colors | painted over straight afterward, from a subclass on the popup |
+| Long menus an app splits into columns, such as After Effects' Effect menu | Windows, without its theme, since a column break turns the theme off | the column breaks come off while the menu is open, so it is one dark column that scrolls, and go back on when it closes |
 | Photoshop's dropdowns and context menus | The app, owner-drawn with plain GDI | hooks on `FillRect`, `PatBlt`, `GetSysColor` and `GetSysColorBrush`, scoped to the item being painted |
 | Dropdown lists an app draws itself | The app, into the system's `ComboLBox` | the same hooks, scoped to the list's painting |
 
@@ -110,7 +114,7 @@ Anything an app paints from its own palette rather than from a system color or t
 
 A dropdown list Windows draws itself keeps its normal colors.
 
-Long menus scroll rather than splitting into columns, because Windows turns its theme off for any menu that has columns, which leaves them light.
+With **Scroll Long Menus Instead of Columns** turned off, a menu that an app splits into columns stays light, because Windows turns its theme off for any menu that has columns.
 
 ## Credits
 
