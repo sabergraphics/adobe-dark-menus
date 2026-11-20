@@ -1,6 +1,6 @@
 # Adobe Dark Menus
 
-This Windhawk mod gives Adobe apps on Windows dark menus: real menu bars, top-bar dropdowns, context menus and dropdown lists. It also colors their standard title bars to match.
+This Windhawk mod gives Adobe apps on Windows dark menus: real menu bars, top-bar dropdowns, context menus and dropdown lists. It also colors their standard title bars to match, darkens Photoshop's message boxes, and lets the mouse wheel scroll menus too long for the screen.
 
 Everything happens inside each app's own process. No system colors are changed and no other application is affected.
 
@@ -78,12 +78,14 @@ The following settings can be customized in the Windhawk mod panel:
 - **Separator Line Color**: Color for separator lines. Set to match the background color to hide them completely (Default: `#383838`).
 - **Disabled Text Color**: Text color for disabled menu items (Default: `#808080`).
 - **Border Color**: Color of the frame around menus an app draws itself and around dropdown lists. Leave empty to keep the system frame on those menus and to use the background color on lists (Default: `#2D2D2D`).
+- **Title Bar Color**: Leave empty to match Menu Background Color. Windows 11 only: Windows 10 keeps its own dark color (Default: empty).
+- **Title Bar Text Color**: Leave empty to let Windows choose, which dims the text on a window that is not active. Windows 11 only (Default: empty).
 - **Theme Dropdown Lists**: Darken the dropdown lists an app draws itself, using the colors above (Default: on).
 - **Darken Menus Windows Draws**: Use Windows' dark menu theme, and paint real menu bars dark (Default: on).
 - **Scroll Long Menus Instead of Columns**: Open a menu that an app splits into columns as one dark column that scrolls, since Windows cannot darken a menu with columns. After Effects splits its Effect menu this way once it holds more than the screen fits. Turn it off to keep the columns, which stay light (Default: on).
+- **Scroll Long Menus with the Mouse Wheel**: Windows scrolls a menu taller than the screen only with its arrows and the keyboard. With this on, the mouse wheel scrolls it too (Default: on).
+- **Darken Photoshop Message Boxes**: Darken Photoshop's message boxes, such as the prompt to save changes before closing, using the colors above. Their buttons take Windows' own dark style (Default: on).
 - **Dark Title Bars**: Color standard title bars to match the menus (Default: on).
-- **Title Bar Color**: Leave empty to match Menu Background Color (Default: empty).
-- **Title Bar Text Color**: Leave empty to let Windows choose, which dims the text on a window that is not active (Default: empty).
 
 Colors can be given as `#RRGGBB` or the short `#RGB` form.
 
@@ -101,10 +103,13 @@ Adobe's apps do not all draw their menus the same way, and sharing a library doe
 | Long menus an app splits into columns, such as After Effects' Effect menu | Windows, without its theme, since a column break turns the theme off | the column breaks come off while the menu is open, so it is one dark column that scrolls, and go back on when it closes |
 | Photoshop's dropdowns and context menus | The app, owner-drawn with plain GDI | hooks on `FillRect`, `PatBlt`, `GetSysColor` and `GetSysColorBrush`, scoped to the item being painted |
 | Dropdown lists an app draws itself | The app, into the system's `ComboLBox` | the same hooks, scoped to the list's painting |
+| Photoshop's message boxes, such as the prompt to save changes | Photoshop paints the background white, Windows draws the text and buttons | the box is subclassed: its background and text take the menu colors, and its buttons Windows' own dark button theme |
 
 The system color overrides apply **only while a menu item or a dropdown list is actually being painted**, rather than for as long as a menu or list happens to be open. `TrackPopupMenu` runs a modal message loop which keeps dispatching to every other window on the thread, so a panel repainting behind an open menu would otherwise come out in menu colors.
 
 A dropdown list whose rows Windows draws is left alone, the same rule as for menus. Windows fills it from a brush no hook can reach, so recoloring the text alone would leave light text on white. So is a list that stays open inside a dialog, such as the ones in the font picker.
+
+Windows scrolls a menu taller than the screen only with its arrows and the keyboard, and while a menu is open it takes a wheel turn out of the input before the app or any hook in it sees it. So while a menu with scroll arrows is on screen, the mod puts up a low-level mouse hook on that menu's thread, takes a wheel turn made over the menu, and turns it into the menu's own arrow steps, as many rows a notch as Windows' wheel setting says. Every other mouse event passes straight through, and the hook comes down as soon as the menu closes.
 
 Title bars need no drawing at all. The mod sets `DWMWA_USE_IMMERSIVE_DARK_MODE` and `DWMWA_CAPTION_COLOR` on each top-level window with a caption, and puts them back when it is disabled. A window that draws its own title bar, such as the main window of Photoshop, Illustrator or InDesign, is left alone. This is checked per window, so the dialogs in those apps are still colored. A dialog's contents stay whatever color the app or Windows paints them.
 
@@ -113,6 +118,8 @@ Title bars need no drawing at all. The mod sets `DWMWA_USE_IMMERSIVE_DARK_MODE` 
 Anything an app paints from its own palette rather than from a system color or the theme is out of reach, such as Photoshop's font browser and the Glyphs panel's character cells.
 
 A dropdown list Windows draws itself keeps its normal colors.
+
+A Photoshop message box holding anything beyond an icon, text and push buttons, such as a "Don't show again" check box, stays light. The buttons of a darkened one take Windows' own dark colors rather than the colors set here, and need Windows 10 1809 or later.
 
 With **Scroll Long Menus Instead of Columns** turned off, a menu that an app splits into columns stays light, because Windows turns its theme off for any menu that has columns.
 
